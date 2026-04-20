@@ -2,14 +2,36 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>Simple Shooting Game</title>
+<title>Shooting Game</title>
 <style>
-  body { margin: 0; background: #000; overflow: hidden; }
-  canvas { display: block; margin: 0 auto; background: #111; }
+  body { margin:0; background:#000; overflow:hidden; }
+  canvas { display:block; margin:0 auto; background:#111; }
+
+  .btn {
+    position: fixed;
+    bottom: 20px;
+    width: 60px;
+    height: 60px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 50%;
+    color: #fff;
+    font-size: 24px;
+    text-align: center;
+    line-height: 60px;
+    user-select: none;
+  }
+  #leftBtn { left: 20px; }
+  #rightBtn { left: 100px; }
+  #shootBtn { right: 20px; }
 </style>
 </head>
 <body>
+
 <canvas id="game"></canvas>
+
+<div id="leftBtn" class="btn">◀</div>
+<div id="rightBtn" class="btn">▶</div>
+<div id="shootBtn" class="btn">●</div>
 
 <script>
 const canvas = document.getElementById("game");
@@ -17,10 +39,41 @@ const ctx = canvas.getContext("2d");
 canvas.width = 400;
 canvas.height = 600;
 
+/* ===== 音（外部ファイルなし） ===== */
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function beep(freq, duration, type="square", volume=0.1) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  osc.type = type;
+  osc.frequency.value = freq;
+
+  gain.gain.value = volume;
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start();
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+  osc.stop(audioCtx.currentTime + duration);
+}
+
+function soundShoot() { beep(700, 0.08); }
+function soundHit()   { beep(200, 0.15, "sawtooth"); }
+function soundGameOver() {
+  beep(300, 0.2);
+  setTimeout(()=>beep(150,0.3),150);
+}
+
+/* ===== ゲーム ===== */
 let keys = {};
 let bullets = [];
 let enemies = [];
 let gameOver = false;
+
+let score = 0;
+let level = 1;
 
 const player = {
   x: canvas.width / 2 - 20,
@@ -32,11 +85,28 @@ const player = {
 
 document.addEventListener("keydown", e => {
   keys[e.code] = true;
-  if (e.code === "Space") shoot();
+
+  if (audioCtx.state === "suspended") audioCtx.resume();
+
+  if (e.code === "Enter" && gameOver) resetGame();
 });
-document.addEventListener("keyup", e => {
-  keys[e.code] = false;
-});
+
+document.addEventListener("keyup", e => keys[e.code] = false);
+
+/* ボタン */
+function bindBtn(id, key) {
+  const btn = document.getElementById(id);
+  btn.addEventListener("touchstart", () => keys[key] = true);
+  btn.addEventListener("touchend", () => keys[key] = false);
+  btn.addEventListener("mousedown", () => keys[key] = true);
+  btn.addEventListener("mouseup", () => keys[key] = false);
+}
+bindBtn("leftBtn", "ArrowLeft");
+bindBtn("rightBtn", "ArrowRight");
+bindBtn("shootBtn", "Space");
+
+/* 連射 */
+let shootInterval = 0;
 
 function shoot() {
   bullets.push({
@@ -46,6 +116,7 @@ function shoot() {
     h: 10,
     speed: 7
   });
+  soundShoot();
 }
 
 function spawnEnemy() {
@@ -54,7 +125,7 @@ function spawnEnemy() {
     y: -40,
     w: 40,
     h: 40,
-    speed: 2 + Math.random() * 2
+    speed: (2 + Math.random() * 2) * (1 + level * 0.2)
   });
 }
 
@@ -66,21 +137,33 @@ function update() {
 
   player.x = Math.max(0, Math.min(canvas.width - player.w, player.x));
 
+  if (keys["Space"]) {
+    shootInterval++;
+    if (shootInterval % 10 === 0) shoot();
+  } else {
+    shootInterval = 0;
+  }
+
   bullets.forEach(b => b.y -= b.speed);
   bullets = bullets.filter(b => b.y > -10);
 
   enemies.forEach(e => e.y += e.speed);
   enemies = enemies.filter(e => e.y < canvas.height + 40);
 
-  // 衝突判定
   bullets.forEach((b, bi) => {
     enemies.forEach((e, ei) => {
       if (b.x < e.x + e.w &&
           b.x + b.w > e.x &&
           b.y < e.y + e.h &&
           b.y + b.h > e.y) {
+
         bullets.splice(bi, 1);
         enemies.splice(ei, 1);
+
+        score += 10;
+        level = Math.floor(score / 100) + 1;
+
+        soundHit();
       }
     });
   });
@@ -91,29 +174,33 @@ function update() {
         player.y < e.y + e.h &&
         player.y + player.h > e.y) {
       gameOver = true;
+      soundGameOver();
     }
   });
 }
 
 function draw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0,0,canvas.width,canvas.height);
 
-  // プレイヤー
   ctx.fillStyle = "cyan";
   ctx.fillRect(player.x, player.y, player.w, player.h);
 
-  // 弾
   ctx.fillStyle = "yellow";
   bullets.forEach(b => ctx.fillRect(b.x, b.y, b.w, b.h));
 
-  // 敵
   ctx.fillStyle = "red";
   enemies.forEach(e => ctx.fillRect(e.x, e.y, e.w, e.h));
 
+  ctx.fillStyle = "white";
+  ctx.font = "16px sans-serif";
+  ctx.fillText("Score: " + score, 10, 20);
+  ctx.fillText("Level: " + level, 10, 40);
+
   if (gameOver) {
-    ctx.fillStyle = "white";
-    ctx.font = "30px sans-serif";
-    ctx.fillText("GAME OVER", 110, 300);
+    ctx.font = "28px sans-serif";
+    ctx.fillText("GAME OVER", 100, 280);
+    ctx.font = "16px sans-serif";
+    ctx.fillText("Press Enter", 140, 320);
   }
 }
 
@@ -123,7 +210,17 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
+function resetGame() {
+  bullets = [];
+  enemies = [];
+  score = 0;
+  level = 1;
+  gameOver = false;
+  player.x = canvas.width / 2 - 20;
+}
+
 setInterval(spawnEnemy, 1000);
+
 loop();
 </script>
 </body>

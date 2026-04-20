@@ -83,6 +83,157 @@ const scoreDisp = document.getElementById('scoreDisp');
 const levelDisp = document.getElementById('levelDisp');
 const lifeDisp = document.getElementById('lifeDisp');
 
+// --- Audio Engine (Web Audio API) ---
+let audioCtx = null;
+let bgmNodes = [];
+
+function getAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playSound(type) {
+  const ac = getAudio();
+  const now = ac.currentTime;
+
+  if (type === 'shoot') {
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.connect(gain); gain.connect(ac.destination);
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.exponentialRampToValueAtTime(220, now + 0.08);
+    gain.gain.setValueAtTime(0.15, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+    osc.start(now); osc.stop(now + 0.08);
+
+  } else if (type === 'hit') {
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.connect(gain); gain.connect(ac.destination);
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(400, now);
+    osc.frequency.exponentialRampToValueAtTime(80, now + 0.12);
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    osc.start(now); osc.stop(now + 0.12);
+
+  } else if (type === 'explode') {
+    // Noise burst for big explosion
+    const bufSize = ac.sampleRate * 0.3;
+    const buf = ac.createBuffer(1, bufSize, ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const filter = ac.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 200;
+    const gain = ac.createGain();
+    src.connect(filter); filter.connect(gain); gain.connect(ac.destination);
+    gain.gain.setValueAtTime(0.4, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+    src.start(now); src.stop(now + 0.3);
+
+  } else if (type === 'damage') {
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.connect(gain); gain.connect(ac.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(150, now);
+    osc.frequency.setValueAtTime(80, now + 0.1);
+    osc.frequency.setValueAtTime(150, now + 0.2);
+    gain.gain.setValueAtTime(0.3, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    osc.start(now); osc.stop(now + 0.35);
+
+  } else if (type === 'gameover') {
+    [440, 330, 220, 110].forEach((freq, i) => {
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.connect(gain); gain.connect(ac.destination);
+      osc.type = 'sawtooth';
+      osc.frequency.value = freq;
+      const t = now + i * 0.18;
+      gain.gain.setValueAtTime(0.25, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+      osc.start(t); osc.stop(t + 0.3);
+    });
+  }
+}
+
+// --- BGM (procedural loop) ---
+const BGM_NOTES = [
+  // Bass line (freq, duration)
+  [110, 0.25],[110, 0.25],[138, 0.25],[110, 0.25],
+  [123, 0.25],[110, 0.25],[98,  0.25],[110, 0.25],
+];
+const BGM_MELODY = [
+  [440,0.5],[494,0.5],[523,0.25],[494,0.25],[440,0.5],
+  [392,0.5],[440,0.5],[494,1.0],
+];
+
+let bgmPlaying = false;
+let bgmScheduleId = null;
+
+function startBGM() {
+  if (bgmPlaying) return;
+  bgmPlaying = true;
+  scheduleBGM();
+}
+
+function stopBGM() {
+  bgmPlaying = false;
+  if (bgmScheduleId) clearTimeout(bgmScheduleId);
+  bgmNodes.forEach(n => { try { n.stop(); } catch(e){} });
+  bgmNodes = [];
+}
+
+function scheduleBGM() {
+  if (!bgmPlaying) return;
+  const ac = getAudio();
+  const now = ac.currentTime;
+  const loopDur = BGM_NOTES.reduce((s,n)=>s+n[1],0) * 2;
+
+  // Bass
+  let t = now;
+  for (let rep = 0; rep < 2; rep++) {
+    for (const [freq, dur] of BGM_NOTES) {
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.connect(gain); gain.connect(ac.destination);
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.08, t);
+      gain.gain.setValueAtTime(0.04, t + dur * 0.7);
+      gain.gain.setValueAtTime(0.08, t + dur - 0.01);
+      osc.start(t); osc.stop(t + dur);
+      bgmNodes.push(osc);
+      t += dur;
+    }
+  }
+
+  // Melody
+  t = now;
+  for (const [freq, dur] of BGM_MELODY) {
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.connect(gain); gain.connect(ac.destination);
+    osc.type = 'square';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.05, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.9);
+    osc.start(t); osc.stop(t + dur);
+    bgmNodes.push(osc);
+    t += dur;
+  }
+
+  bgmScheduleId = setTimeout(() => {
+    bgmNodes = [];
+    scheduleBGM();
+  }, loopDur * 1000 - 50);
+}
+
 // --- State ---
 let state = 'title'; // title | play | over
 let score, level, lives;
@@ -264,6 +415,7 @@ function update() {
   if ((keys[' '] || keys['z']) && shootCooldown === 0) {
     bullets.push({ x: player.x, y: player.y - player.h/2 });
     shootCooldown = 12;
+    playSound('shoot');
   }
 
   // Bullets
@@ -295,6 +447,7 @@ function update() {
         spawnParticles(e.x, e.y, e.color, 5);
         if (e.hp <= 0) {
           spawnParticles(e.x, e.y, e.color, 14);
+          playSound(e.type === 'big' ? 'explode' : 'hit');
           score += e.pts;
           level = Math.floor(score / 200) + 1;
           enemies.splice(j, 1);
@@ -313,9 +466,12 @@ function update() {
       enemies.splice(j, 1);
       spawnParticles(player.x, player.y, '#0ff', 16);
       lives--;
+      playSound('damage');
       updateUI();
       if (lives <= 0) {
         state = 'over';
+        stopBGM();
+        playSound('gameover');
         overlay.innerHTML = `
           <h1>GAME<br>OVER</h1>
           <div class="score-disp">SCORE: ${score}</div>
@@ -362,6 +518,8 @@ document.addEventListener('keydown', e => {
       initGame();
       state = 'play';
       overlay.style.display = 'none';
+      stopBGM();
+      startBGM();
     }
   }
 });
