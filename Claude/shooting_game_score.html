@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>STAR SHOOTER</title>
+
+<!-- ===== Supabase CDN ===== -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    height: 100vh;
+    font-family: 'Courier New', monospace;
+    color: #0ff; overflow: hidden;
+  }
+  #ui {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    width: 400px; padding: 4px 0;
+    font-size: 13px; letter-spacing: 1px; gap: 2px;
+  }
+  #timerBar {
+    width: 400px; height: 6px;
+    background: #fff2; border-radius: 3px;
+    margin-bottom: 3px; overflow: hidden;
+  }
+  #timerFill { height: 100%; background: #0ff; border-radius: 3px; transition: background 0.3s; }
+  canvas {
+    border: 1px solid #0ff4;
+    box-shadow: 0 0 30px #0ff3, inset 0 0 30px #0002;
+    background: #000;
+  }
+  #overlay {
+    position: absolute;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 14px; width: 400px; height: 560px;
+    color: #0ff; font-family: 'Courier New', monospace;
+    pointer-events: none; overflow: hidden;
+  }
+  #overlay h1  { font-size: 36px; letter-spacing: 8px; text-shadow: 0 0 20px #0ff; }
+  #overlay p   { font-size: 13px; letter-spacing: 3px; opacity: 0.7; animation: blink 1.2s infinite; }
+  #overlay .score-disp { font-size: 20px; letter-spacing: 4px; color: #ff0; text-shadow: 0 0 10px #ff0; }
+  #overlay .sub { font-size: 11px; letter-spacing: 2px; color: #4f8; opacity: 0.85; }
+
+  /* トップメニュー */
+  .menu-item {
+    font-size: 18px; letter-spacing: 6px; padding: 6px 20px;
+    border: 1px solid #0ff4; cursor: default;
+    transition: color 0.15s, text-shadow 0.15s;
+  }
+  .menu-item.selected {
+    color: #ff0; text-shadow: 0 0 16px #ff0;
+    border-color: #ff08; background: #ff01;
+  }
+
+  /* ランキング表 */
+  .ranking-table {
+    width: 370px; border-collapse: collapse;
+    font-size: 11px; letter-spacing: 1px;
+  }
+  .ranking-table th {
+    color: #ff0; border-bottom: 1px solid #ff04;
+    padding: 3px 4px; text-align: left;
+  }
+  .ranking-table td { padding: 3px 4px; border-bottom: 1px solid #0ff2; }
+  .ranking-table tr.highlight td { color: #ff0; text-shadow: 0 0 8px #ff0; }
+  .ranking-title { font-size: 22px; letter-spacing: 6px; text-shadow: 0 0 16px #0ff; margin-bottom: 4px; }
+  .ranking-back  { font-size: 11px; letter-spacing: 2px; opacity: 0.6; animation: blink 1.2s infinite; margin-top: 6px; }
+  .ranking-err   { color: #f44; font-size: 12px; letter-spacing: 1px; }
+
+  /* ランクイン演出 */
+  .rankin-msg {
+    font-size: 28px; letter-spacing: 6px;
+    color: #ff0; text-shadow: 0 0 30px #ff0, 0 0 60px #f80;
+    animation: rankin-pulse 0.4s infinite alternate;
+  }
+  @keyframes rankin-pulse { from{opacity:1;transform:scale(1)} to{opacity:.7;transform:scale(1.07)} }
+  .rankin-rank { font-size: 16px; letter-spacing: 4px; color: #0ff; }
+
+  @keyframes blink { 0%,100%{opacity:.7} 50%{opacity:.2} }
+</style>
+</head>
+<body>
+<div id="timerBar"><div id="timerFill"></div></div>
+<div id="ui">
+  <span>SCORE: <span id="scoreDisp">0</span></span>
+  <span style="text-align:center">LV: <span id="levelDisp">1</span></span>
+  <span style="text-align:right">LIFE: <span id="lifeDisp">♥♥♥</span></span>
+  <span>PWR: <span id="pwrDisp">●○○</span></span>
+  <span style="text-align:center">QUOTA: <span id="quotaDisp">50</span></span>
+  <span style="text-align:right">TIME: <span id="timeDisp">30</span>s</span>
+</div>
+<div style="position:relative">
+  <canvas id="c" width="400" height="560"></canvas>
+  <div id="overlay"></div>
+</div>
+
+<script>
+// =======================================================
+// ===== Supabase 設定 =====
+// =======================================================
+const SUPABASE_URL = 'https://wcyahqzuayjfnnarqchn.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_sVfXBpf_HXiHewvUZaIF6w_TeyLFjj-';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// =======================================================
+// ===== Canvas / DOM =====
+// =======================================================
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const overlay   = document.getElementById('overlay');
+const scoreDisp = document.getElementById('scoreDisp');
+const levelDisp = document.getElementById('levelDisp');
+const lifeDisp  = document.getElementById('lifeDisp');
+const pwrDisp   = document.getElementById('pwrDisp');
+const quotaDisp = document.getElementById('quotaDisp');
+const timeDisp  = document.getElementById('timeDisp');
+const timerFill = document.getElementById('timerFill');
+
+// =======================================================
+// ===== AUDIO =====
+// =======================================================
+let audioCtx = null, bgmNodes = [], bgmPlaying = false, bgmId = null;
+
+function getAC() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playSound(type) {
+  const ac = getAC(), now = ac.currentTime;
+  function mk(t='sine') { const o=ac.createOscillator(); o.type=t; return o; }
+  function gn()         { return ac.createGain(); }
+  function wire(o,g)    { o.connect(g); g.connect(ac.destination); }
+
+  if (type==='shoot') {
+    const o=mk('square'),g=gn(); wire(o,g);
+    o.frequency.setValueAtTime(700,now); o.frequency.exponentialRampToValueAtTime(180,now+0.07);
+    g.gain.setValueAtTime(0.12,now); g.gain.exponentialRampToValueAtTime(0.001,now+0.07);
+    o.start(now); o.stop(now+0.07);
+
+  } else if (type==='hit') {
+    const o=mk('sawtooth'),g=gn(); wire(o,g);
+    o.frequency.setValueAtTime(350,now); o.frequency.exponentialRampToValueAtTime(70,now+0.12);
+    g.gain.setValueAtTime(0.18,now); g.gain.exponentialRampToValueAtTime(0.001,now+0.12);
+    o.start(now); o.stop(now+0.12);
+
+  } else if (type==='explode') {
+    const sz=ac.sampleRate*0.3, buf=ac.createBuffer(1,sz,ac.sampleRate);
+    const d=buf.getChannelData(0); for(let i=0;i<sz;i++) d[i]=Math.random()*2-1;
+    const src=ac.createBufferSource(); src.buffer=buf;
+    const f=ac.createBiquadFilter(); f.type='bandpass'; f.frequency.value=180;
+    const g=gn(); src.connect(f); f.connect(g); g.connect(ac.destination);
+    g.gain.setValueAtTime(0.4,now); g.gain.exponentialRampToValueAtTime(0.001,now+0.3);
+    src.start(now); src.stop(now+0.3);
+
+  } else if (type==='damage') {
+    const o=mk('sine'),g=gn(); wire(o,g);
+    o.frequency.setValueAtTime(160,now); o.frequency.setValueAtTime(80,now+0.1);
+    o.frequency.setValueAtTime(160,now+0.2);
+    g.gain.setValueAtTime(0.3,now); g.gain.exponentialRampToValueAtTime(0.001,now+0.35);
+    o.start(now); o.stop(now+0.35);
+
+  } else if (type==='penalty') {
+    [200,160,120].forEach((f,i)=>{
+      const o=mk('sawtooth'),g=gn(); wire(o,g);
+      const t=now+i*0.15; o.frequency.value=f;
+      g.gain.setValueAtTime(0.25,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.2);
+      o.start(t); o.stop(t+0.2);
+    });
+
+  } else if (type==='powerup') {
+    [440,554,659,880].forEach((f,i)=>{
+      const o=mk('sine'),g=gn(); wire(o,g);
+      const t=now+i*0.07; o.frequency.value=f;
+      g.gain.setValueAtTime(0.18,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.15);
+      o.start(t); o.stop(t+0.15);
+    });
+
+  } else if (type==='lifeup') {
+    [523,659,784,1047].forEach((f,i)=>{
+      const o=mk('triangle'),g=gn(); wire(o,g);
+      const t=now+i*0.08; o.frequency.value=f;
+      g.gain.setValueAtTime(0.2,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.18);
+      o.start(t); o.stop(t+0.18);
+    });
+
+  } else if (type==='ally_hit') {
+    [300,317].forEach(f=>{
+      const o=mk('sawtooth'),g=gn(); wire(o,g); o.frequency.value=f;
+      g.gain.setValueAtTime(0.22,now); g.gain.exponentialRampToValueAtTime(0.001,now+0.4);
+      o.start(now); o.stop(now+0.4);
+    });
+
+  } else if (type==='gameover') {
+    [440,330,220,110].forEach((f,i)=>{
+      const o=mk('sawtooth'),g=gn(); wire(o,g);
+      const t=now+i*0.18; o.frequency.value=f;
+      g.gain.setValueAtTime(0.22,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.28);
+      o.start(t); o.stop(t+0.28);
+    });
+  }
+}
+
+// ===== Supabase: ランクイン時のファンファーレ（ディレイ風余韻付き） =====
+function playFanfare() {
+  const ac = getAC(), now = ac.currentTime;
+  // ディレイノード（簡易エコー）
+  const delay = ac.createDelay(0.5);
+  delay.delayTime.value = 0.22;
+  const feedback = ac.createGain(); feedback.gain.value = 0.35;
+  const delayGain = ac.createGain(); delayGain.gain.value = 0.4;
+  delay.connect(feedback); feedback.connect(delay);
+  delay.connect(delayGain); delayGain.connect(ac.destination);
+
+  // ファンファーレ音列
+  const notes = [
+    [523,0.0,0.18],[659,0.15,0.18],[784,0.30,0.18],
+    [1047,0.45,0.35],[784,0.65,0.12],[1047,0.75,0.5],
+  ];
+  notes.forEach(([f,dt,dur])=>{
+    const o=ac.createOscillator(), g=ac.createGain();
+    o.type='square'; o.frequency.value=f;
+    o.connect(g);
+    g.connect(ac.destination); // ドライ音
+    g.connect(delay);          // ウェット（ディレイ送り）
+    const t=now+dt;
+    g.gain.setValueAtTime(0.22,t);
+    g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+    o.start(t); o.stop(t+dur+0.05);
+  });
+  // 低音サポート
+  [262,330,392,523].forEach((f,i)=>{
+    const o=ac.createOscillator(),g=ac.createGain();
+    o.type='triangle'; o.frequency.value=f;
+    o.connect(g); g.connect(ac.destination);
+    const t=now+i*0.15;
+    g.gain.setValueAtTime(0.1,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.3);
+    o.start(t); o.stop(t+0.35);
+  });
+}
+
+const BGM_BASS = [[110,.25],[110,.25],[138,.25],[110,.25],[123,.25],[110,.25],[98,.25],[110,.25]];
+const BGM_MEL  = [[440,.5],[494,.5],[523,.25],[494,.25],[440,.5],[392,.5],[440,.5],[494,1.0]];
+
+function startBGM() { if(bgmPlaying)return; bgmPlaying=true; scheduleBGM(); }
+function stopBGM()  {
+  bgmPlaying=false; if(bgmId)clearTimeout(bgmId);
+  bgmNodes.forEach(n=>{try{n.stop()}catch(e){}}); bgmNodes=[];
+}
+function scheduleBGM() {
+  if(!bgmPlaying)return;
+  const ac=getAC(), now=ac.currentTime;
+  const dur=BGM_BASS.reduce((s,n)=>s+n[1],0)*2;
+  let t=now;
+  for(let r=0;r<2;r++) for(const [f,d] of BGM_BASS){
+    const o=ac.createOscillator(),g=ac.createGain();
+    o.connect(g); g.connect(ac.destination); o.type='triangle'; o.frequency.value=f;
+    g.gain.setValueAtTime(0.07,t); g.gain.setValueAtTime(0.04,t+d*.7);
+    o.start(t); o.stop(t+d); bgmNodes.push(o); t+=d;
+  }
+  t=now;
+  for(const [f,d] of BGM_MEL){
+    const o=ac.createOscillator(),g=ac.createGain();
+    o.connect(g); g.connect(ac.destination); o.type='square'; o.frequency.value=f;
+    g.gain.setValueAtTime(0.04,t); g.gain.exponentialRampToValueAtTime(0.001,t+d*.9);
+    o.start(t); o.stop(t+d); bgmNodes.push(o); t+=d;
+  }
+  bgmId=setTimeout(()=>{bgmNodes=[];scheduleBGM();},dur*1000-50);
+}
+
+// =======================================================
+// ===== Supabase: ユーザー名 =====
+// =======================================================
+function getPlayerName() {
+  // localStorageから取得。なければnullを返す（呼び出し元でpromptする）
+  return localStorage.getItem('star_shooter_player_name');
+}
+
+function savePlayerName(name) {
+  localStorage.setItem('star_shooter_player_name', name);
+}
+
+async function ensurePlayerName() {
+  // 既存の名前があればそのまま返す
+  let name = getPlayerName();
+  if (name) return name;
+  // 初回のみ入力を求める（1〜10文字）
+  while (true) {
+    name = window.prompt('プレイヤー名を入力してください（1〜10文字）', '');
+    if (name === null) name = ''; // キャンセルは空として扱う
+    name = name.trim();
+    if (name.length >= 1 && name.length <= 10) break;
+    window.alert('名前は1〜10文字で入力してください。');
+  }
+  savePlayerName(name);
+  return name;
+}
+
+// =======================================================
+// ===== Supabase: スコア保存・取得 =====
+// =======================================================
+
+// スコアを保存する（INSERT のみ・UPDATE/DELETE 不使用）
+async function saveScore(playerName, scoreVal) {
+  const { error } = await sb
+    .from('scores')
+    .insert({ player_name: playerName, score: scoreVal });
+  if (error) {
+    console.error('[Supabase] スコア保存エラー:', error);
+    throw error;
+  }
+}
+
+// 上位10件を取得する（score降順、同点はcreated_at昇順）
+async function fetchRanking() {
+  const { data, error } = await sb
+    .from('scores')
+    .select('id, player_name, score, created_at')
+    .order('score', { ascending: false })
+    .order('created_at', { ascending: true })
+    .limit(10);
+  if (error) {
+    console.error('[Supabase] ランキング取得エラー:', error);
+    throw error;
+  }
+  return data;
+}
+
+// created_at を読みやすい日時に整形
+function formatDate(iso) {
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}/${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// =======================================================
+// ===== GAME CONSTANTS =====
+// =======================================================
+const TIMER_SEC       = 30;
+const QUOTA_BASE      = 50;
+const BULLET_SPD_BASE = 5;
+const BULLET_SPD_MAX  = 11;
+const PWR_MAX         = 3;
+
+// =======================================================
+// ===== STATE =====
+// =======================================================
+// state: 'menu' | 'ranking' | 'play' | 'over' | 'saving' | 'rankin'
+let state = 'menu';
+let menuCursor = 0; // 0=START, 1=RANKING
+let score, level, lives, power, quota, quotaScore;
+let timerFrames, timerMax;
+let player, bullets, enemies, items, particles, stars;
+let keys = {}, shootCd=0, enemyTimer=0, itemTimer=0, frame=0;
+
+// =======================================================
+// ===== STARS =====
+// =======================================================
+function initStars() {
+  stars = Array.from({length:80},()=>({
+    x:Math.random()*W, y:Math.random()*H,
+    r:Math.random()*1.5+0.3,
+    speed:Math.random()*0.6+0.2,
+    bright:Math.random()
+  }));
+}
+
+// =======================================================
+// ===== INIT GAME =====
+// =======================================================
+function initGame() {
+  score=0; level=1; lives=3; power=1;
+  quota=QUOTA_BASE; quotaScore=0;
+  timerMax=TIMER_SEC*60; timerFrames=timerMax;
+  player={x:W/2,y:H-50,w:28,h:28,speed:4};
+  bullets=[]; enemies=[]; items=[]; particles=[];
+  shootCd=0; enemyTimer=0; itemTimer=0; frame=0;
+  updateUI();
+}
+
+function updateUI() {
+  scoreDisp.textContent=score;
+  levelDisp.textContent=level;
+  lifeDisp.textContent='♥'.repeat(Math.max(0,lives))+'♡'.repeat(Math.max(0,3-lives));
+  pwrDisp.textContent='●'.repeat(power)+'○'.repeat(PWR_MAX-power);
+  quotaDisp.textContent=Math.max(0,quota-quotaScore);
+  timeDisp.textContent=Math.ceil(timerFrames/60);
+  const r=timerFrames/timerMax;
+  timerFill.style.width=(r*100)+'%';
+  timerFill.style.background=r>0.4?'#0ff':r>0.2?'#ff0':'#f44';
+}
+
+// =======================================================
+// ===== OVERLAY 表示ヘルパー =====
+// =======================================================
+function showMenu() {
+  state = 'menu';
+  menuCursor = 0;
+  renderMenu();
+}
+
+function renderMenu() {
+  overlay.innerHTML = `
+    <h1>STAR<br>SHOOTER</h1>
+    <div class="sub">★ ALLY は撃ってはいけない！</div>
+    <div class="menu-item ${menuCursor===0?'selected':''}">▶ START</div>
+    <div class="menu-item ${menuCursor===1?'selected':''}">▶ RANKING</div>
+    <div style="font-size:10px;letter-spacing:2px;opacity:0.4;margin-top:4px">↑↓ or W/S : 選択　SPACE/ENTER : 決定</div>`;
+  overlay.style.display = 'flex';
+}
+
+// ===== ランキング画面表示 =====
+async function showRanking(highlightId = null) {
+  state = 'ranking';
+  overlay.innerHTML = `<div class="ranking-title">RANKING</div><div style="color:#0ff8;font-size:11px;letter-spacing:1px">読み込み中...</div>`;
+  overlay.style.display = 'flex';
+
+  let rows = '';
+  try {
+    const data = await fetchRanking();
+    if (data.length === 0) {
+      rows = `<tr><td colspan="4" style="text-align:center;opacity:0.5">データがありません</td></tr>`;
+    } else {
+      data.forEach((r, i) => {
+        const isMe = highlightId && r.id === highlightId;
+        rows += `<tr class="${isMe?'highlight':''}">
+          <td>${i+1}</td>
+          <td>${escHtml(r.player_name)}</td>
+          <td>${r.score}</td>
+          <td style="opacity:.7">${formatDate(r.created_at)}</td>
+        </tr>`;
+      });
+    }
+    overlay.innerHTML = `
+      <div class="ranking-title">RANKING</div>
+      <table class="ranking-table">
+        <thead><tr><th>#</th><th>NAME</th><th>SCORE</th><th>DATE</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="ranking-back">クリック または 任意のキーで戻る</div>`;
+  } catch(e) {
+    overlay.innerHTML = `
+      <div class="ranking-title">RANKING</div>
+      <div class="ranking-err">ランキングの取得に失敗しました</div>
+      <div class="ranking-back">クリック または 任意のキーで戻る</div>`;
+  }
+  overlay.style.display = 'flex';
+}
+
+// HTML特殊文字エスケープ（XSS防止）
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ===== ランクイン演出表示 =====
+function showRankinScreen(rank, savedId) {
+  state = 'rankin';
+  overlay.innerHTML = `
+    <div class="rankin-msg">★ RANK IN! ★</div>
+    <div class="rankin-rank">${rank}位 にランクイン！</div>
+    <div class="score-disp">SCORE: ${score}</div>
+    <p style="margin-top:8px">しばらくするとランキングへ...</p>`;
+  overlay.style.display = 'flex';
+  playFanfare();
+  // 3秒後に自動でランキング画面へ
+  setTimeout(() => showRanking(savedId), 3000);
+}
+
+// =======================================================
+// ===== Supabase: ゲームオーバー後の保存→判定フロー =====
+// =======================================================
+async function handleGameOver() {
+  // 保存中表示
+  overlay.innerHTML = `
+    <h1>GAME<br>OVER</h1>
+    <div class="score-disp">SCORE: ${score}</div>
+    <div style="font-size:12px;letter-spacing:2px;opacity:0.7">スコアを保存中...</div>`;
+  overlay.style.display = 'flex';
+
+  let playerName;
+  try {
+    playerName = await ensurePlayerName();
+  } catch(e) {
+    // prompt系のエラーはフォールバック
+    playerName = 'PLAYER';
+  }
+
+  let savedId = null;
+  try {
+    // スコアをINSERT（毎回保存）
+    await saveScore(playerName, score);
+
+    // 保存直後に再取得してIDを特定するため、再度取得
+    const ranking = await fetchRanking();
+
+    // 今回の記録が上位10件に入っているか判定
+    // 同名・同スコアが複数ある場合、最新のもの（last）を自分のものとして扱う
+    // ※ IDで特定できないのでcreated_at最新を暫定的に「自分」と見なす
+    // より正確にするには insert の returning を使うが、Supabaseのanonでは
+    // select権限があればinsert後の再selectで代替可能
+    const { data: myRow } = await sb
+      .from('scores')
+      .select('id, score, created_at')
+      .eq('player_name', playerName)
+      .eq('score', score)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (myRow && myRow.length > 0) {
+      savedId = myRow[0].id;
+      const rankPos = ranking.findIndex(r => r.id === savedId);
+      if (rankPos !== -1) {
+        // ランクイン（0-indexed → 1-indexed）
+        showRankinScreen(rankPos + 1, savedId);
+        return;
+      }
+    }
+    // ランクインなし → 通常のランキング表示
+    await showRanking(null);
+
+  } catch(e) {
+    console.error('[Supabase] ゲームオーバー処理エラー:', e);
+    // エラー時もゲームは止めない
+    overlay.innerHTML = `
+      <h1>GAME<br>OVER</h1>
+      <div class="score-disp">SCORE: ${score}</div>
+      <div class="ranking-err" style="font-size:11px">ランキングの保存に失敗しました</div>
+      <p>クリック または 任意のキーで戻る</p>`;
+    overlay.style.display = 'flex';
+    state = 'ranking'; // キー入力でメニューに戻れるように
+  }
+}
+
+// =======================================================
+// ===== SPAWN =====
+// =======================================================
+function spawnEnemy() {
+  const r=Math.random();
+  const t = r<0.07?'big' : r<0.18?'fast' : r<0.32?'zigzag' : r<0.40?'ally' : 'normal';
+  const cfg={
+    normal:{ w:22,h:22,speed:1.2,hp:1,color:'#f44',pts:10 },
+    fast:  { w:16,h:16,speed:2.4,hp:1,color:'#f84',pts:20 },
+    big:   { w:34,h:34,speed:0.7,hp:3,color:'#a4f',pts:50 },
+    zigzag:{ w:20,h:20,speed:1.6,hp:1,color:'#4cf',pts:30 },
+    ally:  { w:24,h:24,speed:1.0,hp:1,color:'#4f8',pts:0  },
+  }[t];
+  enemies.push({
+    x:Math.random()*(W-cfg.w)+cfg.w/2, y:-cfg.h,
+    ...cfg, type:t,
+    zph:Math.random()*Math.PI*2,
+    zamp:1.5+Math.random()*1.5,
+    zfrq:0.04+Math.random()*0.03,
+  });
+}
+
+function spawnItem(x,y) {
+  if(Math.random()<0.35)
+    items.push({x,y,type:Math.random()<0.3?'life':'power',vy:1.2,fr:0});
+}
+
+function spawnPfx(x,y,color,n=8) {
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, sp=Math.random()*3+1;
+    particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,
+      life:1,decay:Math.random()*0.04+0.03,r:Math.random()*3+1,color});
+  }
+}
+
+// =======================================================
+// ===== DRAW =====
+// =======================================================
+function drawPlayer(p) {
+  ctx.save(); ctx.translate(p.x,p.y);
+  if(power>=2){
+    ctx.shadowColor='#ff0'; ctx.shadowBlur=18+Math.sin(frame*0.15)*8;
+    ctx.strokeStyle='#ff08'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(0,0,p.w/2+5,0,Math.PI*2); ctx.stroke();
+  }
+  ctx.fillStyle='#0ff'; ctx.shadowColor='#0ff'; ctx.shadowBlur=12;
+  ctx.beginPath();
+  ctx.moveTo(0,-p.h/2); ctx.lineTo(p.w/2,p.h/2);
+  ctx.lineTo(0,p.h/3); ctx.lineTo(-p.w/2,p.h/2);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle=`hsla(${frame*10%360},100%,70%,0.7)`;
+  ctx.shadowColor='#ff0'; ctx.shadowBlur=8;
+  ctx.beginPath(); ctx.ellipse(0,p.h/2+4,5,4+Math.sin(frame*0.3)*2,0,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawEnemy(e) {
+  ctx.save(); ctx.translate(e.x,e.y);
+  ctx.fillStyle=e.color; ctx.shadowColor=e.color; ctx.shadowBlur=10;
+  if(e.type==='ally'){
+    ctx.shadowBlur=16+Math.sin(frame*0.2)*6;
+    ctx.beginPath();
+    for(let i=0;i<10;i++){
+      const a=i/10*Math.PI*2-Math.PI/2, r=i%2===0?e.w/2:e.w/4;
+      i===0?ctx.moveTo(Math.cos(a)*r,Math.sin(a)*r):ctx.lineTo(Math.cos(a)*r,Math.sin(a)*r);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#000'; ctx.shadowBlur=0;
+    ctx.font='bold 11px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('★',0,0);
+    ctx.fillStyle=e.color; ctx.font='7px monospace';
+    ctx.fillText('ALLY',0,e.h/2+9);
+  } else if(e.type==='big'){
+    ctx.beginPath();
+    for(let i=0;i<6;i++){
+      const a=i/6*Math.PI*2-Math.PI/2, r=i%2===0?e.w/2:e.w/3.5;
+      i===0?ctx.moveTo(Math.cos(a)*r,Math.sin(a)*r):ctx.lineTo(Math.cos(a)*r,Math.sin(a)*r);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#fff4'; ctx.fillRect(-e.w/2,-e.h/2-7,e.w,3);
+    ctx.fillStyle='#0f0'; ctx.fillRect(-e.w/2,-e.h/2-7,e.w*(e.hp/3),3);
+  } else if(e.type==='fast'){
+    ctx.beginPath();
+    ctx.moveTo(0,e.h/2); ctx.lineTo(e.w/2,-e.h/2); ctx.lineTo(-e.w/2,-e.h/2);
+    ctx.closePath(); ctx.fill();
+  } else if(e.type==='zigzag'){
+    ctx.beginPath();
+    ctx.moveTo(0,-e.h/2); ctx.lineTo(e.w/2,0); ctx.lineTo(0,e.h/2); ctx.lineTo(-e.w/2,0);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle=e.color+'5'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(-e.w/2-5,0); ctx.lineTo(e.w/2+5,0); ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.rect(-e.w/2,-e.h/2,e.w,e.h); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawBullet(b) {
+  ctx.save();
+  ctx.fillStyle=b.powered?'#f80':'#ff0';
+  ctx.shadowColor=b.powered?'#f80':'#ff0';
+  ctx.shadowBlur=b.powered?14:8;
+  ctx.beginPath(); ctx.rect(b.x-2,b.y-10,4,b.powered?16:12); ctx.fill();
+  ctx.restore();
+}
+
+function drawItem(it) {
+  ctx.save(); ctx.translate(it.x,it.y);
+  const p=0.85+0.15*Math.sin(it.fr*0.15); ctx.scale(p,p);
+  ctx.font='18px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  if(it.type==='power'){
+    ctx.fillStyle='#ff0'; ctx.shadowColor='#ff0'; ctx.shadowBlur=12; ctx.fillText('⚡',0,0);
+  } else {
+    ctx.fillStyle='#f66'; ctx.shadowColor='#f66'; ctx.shadowBlur=12; ctx.fillText('♥',0,0);
+  }
+  ctx.restore();
+}
+
+function drawPfx(p) {
+  ctx.save(); ctx.globalAlpha=p.life;
+  ctx.fillStyle=p.color; ctx.shadowColor=p.color; ctx.shadowBlur=6;
+  ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawStars() {
+  for(const s of stars){
+    ctx.globalAlpha=0.3+s.bright*0.7*(0.6+0.4*Math.sin(frame*0.05+s.x));
+    ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha=1;
+}
+
+function drawTimerFlash() {
+  if(timerFrames<300 && Math.floor(timerFrames/15)%2===0){
+    ctx.save(); ctx.fillStyle='#f443'; ctx.fillRect(0,0,W,H); ctx.restore();
+  }
+}
+
+function drawQuotaBar() {
+  const r=Math.min(quotaScore/quota,1);
+  ctx.save();
+  ctx.fillStyle='#fff1'; ctx.fillRect(0,H-4,W,4);
+  ctx.fillStyle='#0f09'; ctx.fillRect(0,H-4,W*r,4);
+  ctx.restore();
+}
+
+// =======================================================
+// ===== GAME LOGIC =====
+// =======================================================
+function bulletSpeed() {
+  return BULLET_SPD_BASE+(power-1)*((BULLET_SPD_MAX-BULLET_SPD_BASE)/(PWR_MAX-1));
+}
+
+function takeDamage() {
+  lives--;
+  playSound('damage');
+  updateUI();
+  if(lives<=0) gameOver();
+}
+
+function gameOver() {
+  state = 'saving'; // 保存中はキー入力を無視
+  stopBGM();
+  playSound('gameover');
+  handleGameOver(); // 非同期で保存・ランキング表示
+}
+
+function update() {
+  frame++;
+  for(const s of stars){s.y+=s.speed;if(s.y>H){s.y=0;s.x=Math.random()*W;}}
+
+  if(state!=='play') return;
+
+  // タイマー
+  timerFrames--;
+  if(timerFrames<=0){
+    if(quotaScore>=quota){
+      quotaScore-=quota; quota=Math.floor(quota*1.4);
+      timerFrames=timerMax; playSound('powerup');
+    } else {
+      playSound('penalty'); lives--;
+      timerFrames=timerMax; quotaScore=0;
+      updateUI(); if(lives<=0){gameOver();return;}
+    }
+  }
+  updateUI();
+
+  // 移動
+  if(keys['ArrowLeft'] ||keys['a']) player.x=Math.max(player.w/2,player.x-player.speed);
+  if(keys['ArrowRight']||keys['d']) player.x=Math.min(W-player.w/2,player.x+player.speed);
+
+  // 射撃
+  if(shootCd>0) shootCd--;
+  if((keys[' ']||keys['z'])&&shootCd===0){
+    const sp=bulletSpeed(), pw=power>=3;
+    bullets.push({x:player.x,y:player.y-player.h/2,speed:sp,powered:pw});
+    if(power>=2){
+      bullets.push({x:player.x-10,y:player.y-player.h/2+4,speed:sp,powered:pw});
+      bullets.push({x:player.x+10,y:player.y-player.h/2+4,speed:sp,powered:pw});
+    }
+    shootCd=Math.max(6,12-power*2);
+    playSound('shoot');
+  }
+
+  bullets=bullets.filter(b=>{b.y-=b.speed;return b.y>-12;});
+
+  const spawnRate=Math.max(38-level*4,12);
+  if(++enemyTimer>=spawnRate){spawnEnemy();enemyTimer=0;}
+
+  if(++itemTimer>300){
+    itemTimer=0;
+    if(Math.random()<0.3)
+      items.push({x:Math.random()*(W-40)+20,y:-20,type:Math.random()<0.4?'life':'power',vy:1.0,fr:0});
+  }
+
+  const lv=1+(level-1)*0.15;
+  enemies=enemies.filter(e=>{
+    e.y+=e.speed*lv;
+    if(e.type==='zigzag'){
+      e.zph+=e.zfrq;
+      e.x+=Math.sin(e.zph)*e.zamp*2;
+      e.x=Math.max(e.w/2,Math.min(W-e.w/2,e.x));
+    }
+    return e.y<H+e.h;
+  });
+
+  items=items.filter(it=>{it.y+=it.vy;it.fr++;return it.y<H+30;});
+
+  // 弾 vs 敵
+  for(let i=bullets.length-1;i>=0;i--){
+    for(let j=enemies.length-1;j>=0;j--){
+      const b=bullets[i],e=enemies[j];
+      if(!b||!e) continue;
+      if(Math.abs(b.x-e.x)<e.w/2+2 && Math.abs(b.y-e.y)<e.h/2+5){
+        bullets.splice(i,1);
+        if(e.type==='ally'){
+          spawnPfx(e.x,e.y,'#4f8',10); enemies.splice(j,1);
+          playSound('ally_hit'); takeDamage(); break;
+        }
+        e.hp--;
+        spawnPfx(e.x,e.y,e.color,5);
+        if(e.hp<=0){
+          spawnPfx(e.x,e.y,e.color,14);
+          playSound(e.type==='big'?'explode':'hit');
+          score+=e.pts; quotaScore+=e.pts;
+          level=Math.floor(score/300)+1;
+          spawnItem(e.x,e.y); enemies.splice(j,1);
+        }
+        updateUI(); break;
+      }
+    }
+  }
+
+  // 敵 vs プレイヤー
+  for(let j=enemies.length-1;j>=0;j--){
+    const e=enemies[j];
+    if(Math.abs(e.x-player.x)<(e.w+player.w)/2-5 &&
+       Math.abs(e.y-player.y)<(e.h+player.h)/2-5){
+      enemies.splice(j,1); spawnPfx(player.x,player.y,'#0ff',16); takeDamage();
+    }
+  }
+
+  // アイテム vs プレイヤー
+  for(let j=items.length-1;j>=0;j--){
+    const it=items[j];
+    if(Math.abs(it.x-player.x)<22&&Math.abs(it.y-player.y)<22){
+      items.splice(j,1);
+      if(it.type==='power'){
+        power=Math.min(PWR_MAX,power+1); playSound('powerup'); spawnPfx(player.x,player.y,'#ff0',12);
+      } else {
+        lives=Math.min(5,lives+1); playSound('lifeup'); spawnPfx(player.x,player.y,'#f66',12);
+      }
+      updateUI();
+    }
+  }
+
+  particles=particles.filter(p=>{
+    p.x+=p.vx;p.y+=p.vy;p.vy+=0.05;p.life-=p.decay;return p.life>0;
+  });
+}
+
+function draw() {
+  ctx.clearRect(0,0,W,H);
+  drawStars();
+  if(state==='play'){
+    drawTimerFlash(); drawQuotaBar();
+    drawPlayer(player);
+    bullets.forEach(drawBullet);
+    enemies.forEach(drawEnemy);
+    items.forEach(drawItem);
+    particles.forEach(drawPfx);
+  }
+}
+
+function loop(){update();draw();requestAnimationFrame(loop);}
+
+// =======================================================
+// ===== INPUT =====
+// =======================================================
+document.addEventListener('keydown', e=>{
+  keys[e.key]=true;
+  if(e.key===' ') e.preventDefault();
+
+  // メニュー操作
+  if(state==='menu'){
+    if(e.key==='ArrowUp'||e.key==='w'||e.key==='W'){
+      menuCursor=(menuCursor-1+2)%2; renderMenu();
+    } else if(e.key==='ArrowDown'||e.key==='s'||e.key==='S'){
+      menuCursor=(menuCursor+1)%2; renderMenu();
+    } else if(e.key===' '||e.key==='Enter'){
+      if(menuCursor===0){
+        // START
+        initGame(); state='play';
+        overlay.style.display='none';
+        stopBGM(); startBGM();
+      } else {
+        // RANKING
+        showRanking();
+      }
+    }
+    return;
+  }
+
+  // ランキング画面：任意キーでメニューへ
+  if(state==='ranking'){
+    showMenu(); return;
+  }
+
+  // ランクイン演出中はキー無効（自動遷移に任せる）
+  // saving中もキー無効
+});
+
+document.addEventListener('keyup',e=>{keys[e.key]=false;});
+
+// ランキング画面クリックでメニューへ
+overlay.addEventListener('click',()=>{
+  if(state==='ranking') showMenu();
+});
+
+// =======================================================
+// ===== BOOT =====
+// =======================================================
+initStars();
+showMenu();
+loop();
+</script>
+</body>
+</html>
