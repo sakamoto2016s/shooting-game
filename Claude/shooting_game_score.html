@@ -35,11 +35,14 @@
   }
   #overlay {
     position: absolute;
+    top: 0; left: 0;
+    z-index: 10;
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     gap: 14px; width: 400px; height: 560px;
     color: #0ff; font-family: 'Courier New', monospace;
-    pointer-events: none; overflow: hidden;
+    pointer-events: auto; overflow: hidden;
+    background: #0009;
   }
   #overlay h1  { font-size: 36px; letter-spacing: 8px; text-shadow: 0 0 20px #0ff; }
   #overlay p   { font-size: 13px; letter-spacing: 3px; opacity: 0.7; animation: blink 1.2s infinite; }
